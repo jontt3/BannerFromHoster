@@ -1,0 +1,14 @@
+{
+    "name": "BannerFromHolster",
+    "description": "Client-side custom banners and animated avatars. Compatible with USRBG.",
+    "authors": [
+        {
+            "name": "Jonttex",
+            "id": "571800335757082624"
+        }
+    ],
+    "main": "src/index.tsx",
+    "vendetta": {
+        "icon": "ic_profile_24px"
+    }
+}
