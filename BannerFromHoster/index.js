@@ -1,263 +1,178 @@
-(function(l, p, w, b, E, g, n, f, D) {
-    "use strict";
+let patches = [];
 
-    function m(e, a, d, s, c, i, t) {
-        try {
-            var o = e[i](t),
-                r = o.value
-        } catch (B) {
-            d(B);
-            return
+const {
+    logger,
+    metro: { findByProps },
+    patcher,
+    ui: { toasts, components },
+    storage
+} = vendetta;
+
+const { 
+    ScrollView, 
+    TextInput, 
+    Button,
+    View,
+    Text
+} = components;
+
+// Default settings
+const defaultSettings = {
+    banners: {} // { userId: "https://catbox.moe/..." }
+};
+
+// Load or init storage
+let settings = storage?.get?.("customBanners") || defaultSettings;
+
+function saveSettings() {
+    if (storage?.set) storage.set("customBanners", settings);
+}
+
+// Patch getUserBannerURL to return custom banners
+function patchBanner() {
+    try {
+        const UserBannerUtils = findByProps("getUserBannerURL");
+        if (!UserBannerUtils) {
+            logger.error("CustomBanner", "Could not find getUserBannerURL");
+            return false;
         }
-        o.done ? a(r) : Promise.resolve(r).then(s, c)
+
+        const unpatch = patcher.after("getUserBannerURL", UserBannerUtils, (args, ret) => {
+            const [user] = args;
+            if (!user?.id) return ret;
+            
+            const customUrl = settings.banners[user.id];
+            if (customUrl) return customUrl;
+            
+            return ret;
+        });
+
+        patches.push(unpatch);
+        return true;
+    } catch (e) {
+        logger.error("CustomBanner", "Failed to patch banner:", e);
+        return false;
     }
+}
 
-    function h(e) {
-        return function() {
-            var a = this,
-                d = arguments;
-            return new Promise(function(s, c) {
-                var i = e.apply(a, d);
+// Settings page component
+const Settings = () => {
+    const [userId, setUserId] = React.useState("");
+    const [bannerUrl, setBannerUrl] = React.useState("");
+    const [bannerList, setBannerList] = React.useState(Object.entries(settings.banners));
 
-                function t(r) {
-                    m(i, s, c, t, o, "next", r)
-                }
-
-                function o(r) {
-                    m(i, s, c, t, o, "throw", r)
-                }
-                t(void 0)
-            })
-        }
-    }
-
-    var {
-        ScrollView: F
-    } = D.General, {
-        FormSection: U,
-        FormRow: u,
-        FormInput: J,
-        FormSwitchRow: K
-    } = D.Forms;
-
-    // Default configuration
-    const DEFAULT_CONFIG = {
-        enabled: true,
-        endpoint: "https://usrbg.is-hardly.online",
-        usersUrl: "https://usrbg.is-hardly.online/users",
-        bannerUrlTemplate: "{endpoint}/users/{userId}/banner?{hash}",
-        useCustomTemplate: false,
-        customTemplate: ""
+    const refreshList = () => {
+        setBannerList(Object.entries(settings.banners));
     };
 
-    // Storage key for settings
-    const STORAGE_KEY = "usrbg_config";
-
-    // Load saved config or use defaults
-    function loadConfig() {
-        try {
-            const saved = n.storage.getSync(STORAGE_KEY);
-            return saved ? { ...DEFAULT_CONFIG, ...saved } : { ...DEFAULT_CONFIG };
-        } catch (e) {
-            return { ...DEFAULT_CONFIG };
+    const addBanner = () => {
+        if (!userId || !bannerUrl) {
+            toasts.showToast("Fill in both fields");
+            return;
         }
-    }
+        settings.banners[userId] = bannerUrl;
+        saveSettings();
+        setUserId("");
+        setBannerUrl("");
+        refreshList();
+        toasts.showToast("Banner added!");
+    };
 
-    // Save config
-    function saveConfig(config) {
-        n.storage.set(STORAGE_KEY, config);
-    }
+    const removeBanner = (uid) => {
+        delete settings.banners[uid];
+        saveSettings();
+        refreshList();
+        toasts.showToast("Banner removed");
+    };
 
-    let config = loadConfig();
-    let v, R;
-
-    // Fetch user database
-    let y = function() {
-        var e = h(function*() {
-            try {
-                if (!config.enabled) return null;
-                
-                // Support both legacy DB format and direct per-user endpoints
-                if (config.usersUrl) {
-                    v = yield(yield E.safeFetch(config.usersUrl, {
-                        cache: "no-store"
-                    })).json();
-                }
-                return v;
-            } catch (a) {
-                p.logger.error("Failed to fetch userBG data", a);
-                return null;
+    return React.createElement(ScrollView, { style: { padding: 16 } },
+        React.createElement(Text, { style: { fontSize: 20, fontWeight: "bold", marginBottom: 12 } }, "Custom Banners"),
+        React.createElement(Text, { style: { marginBottom: 16, opacity: 0.7 } }, 
+            "Add custom profile banners for any user. Uses any direct image URL (catbox, imgur, etc)."
+        ),
+        
+        // Input section
+        React.createElement(Text, { style: { marginTop: 8 } }, "User ID:"),
+        React.createElement(TextInput, {
+            value: userId,
+            onChangeText: setUserId,
+            placeholder: "123456789012345678",
+            style: { 
+                backgroundColor: "#2b2d31", 
+                padding: 12, 
+                borderRadius: 8, 
+                marginVertical: 8,
+                color: "#fff"
             }
-        });
-        return function() {
-            return e.apply(this, arguments)
-        }
-    }();
-
-    // Build banner URL from template
-    function buildBannerUrl(userId, hash) {
-        let template = config.useCustomTemplate && config.customTemplate 
-            ? config.customTemplate 
-            : config.bannerUrlTemplate;
+        }),
         
-        return template
-            .replace(/{endpoint}/g, config.endpoint)
-            .replace(/{userId}/g, userId)
-            .replace(/{hash}/g, hash || Date.now());
-    }
-
-    // Apply the patch
-    let P = function() {
-        var e = h(function*() {
-            // Unload existing patch first
-            A();
-            
-            if (!config.enabled) return;
-
-            yield y();
-            
-            var I = w.findByProps("default", "getUserBannerURL");
-            
-            R = b.after("getUserBannerURL", I, ([i]) => {
-                // If user has a native banner, don't override
-                if (i?.banner !== undefined) return;
-
-                // Try legacy DB lookup first
-                if (v && typeof v === 'object') {
-                    // Handle old format: {endpoint, bucket, prefix, users}
-                    var users = v.users || v;
-                    var t = Object.entries(users).find(([B, L]) => B === i?.id);
-                    if (t) {
-                        var [o, r] = t;
-                        // Support old format with endpoint/bucket/prefix
-                        if (v.endpoint && v.bucket !== undefined) {
-                            return `${v.endpoint}/${v.bucket}/${v.prefix || ''}${o}?${r}`;
-                        }
-                        // New template-based
-                        return buildBannerUrl(o, r);
-                    }
-                }
-
-                // Direct endpoint fallback: try fetching user banner directly
-                if (config.endpoint && !config.usersUrl) {
-                    return buildBannerUrl(i?.id, Date.now());
-                }
-            });
-        });
-        return function() {
-            return e.apply(this, arguments)
-        }
-    }();
-
-    let A = () => R?.();
-
-    // Settings panel with configuration options
-    let _ = () => {
-        const [cfg, setCfg] = n.React.useState({ ...config });
+        React.createElement(Text, { style: { marginTop: 8 } }, "Banner Image URL:"),
+        React.createElement(TextInput, {
+            value: bannerUrl,
+            onChangeText: setBannerUrl,
+            placeholder: "https://files.catbox.moe/xxxxx.png",
+            style: { 
+                backgroundColor: "#2b2d31", 
+                padding: 12, 
+                borderRadius: 8, 
+                marginVertical: 8,
+                color: "#fff"
+            }
+        }),
         
-        const updateConfig = (key, value) => {
-            const newCfg = { ...cfg, [key]: value };
-            setCfg(newCfg);
-            config = newCfg;
-            saveConfig(newCfg);
-            // Reload patch with new config
-            P();
-        };
+        React.createElement(View, { style: { marginVertical: 12 } },
+            React.createElement(Button, {
+                onPress: addBanner,
+                title: "Add/Update Banner",
+                color: "#5865f2"
+            })
+        ),
 
-        return n.React.createElement(F, null,
-            n.React.createElement(U, { title: "General" },
-                n.React.createElement(K, {
-                    label: "Enable Custom Banners",
-                    subLabel: "Toggle the banner replacement on/off",
-                    value: cfg.enabled,
-                    onValueChange: (v) => updateConfig("enabled", v)
-                })
-            ),
-            n.React.createElement(U, { title: "File Hoster Configuration" },
-                n.React.createElement(u, {
-                    label: "Preset Hosters",
-                    subLabel: "Quick-select a known hoster",
-                    leading: n.React.createElement(u.Icon, { source: f.getAssetIDByName("ic_server") }),
-                    trailing: u.Arrow,
-                    onPress: () => {
-                        // Could open a picker here with presets
-                        g.showToast("Presets: usrbg.is-hardly.online, custom", f.getAssetIDByName("ic_info"));
-                    }
-                }),
-                n.React.createElement(J, {
-                    title: "Users Database URL",
-                    value: cfg.usersUrl || "",
-                    placeholder: "https://example.com/users.json",
-                    onChange: (v) => updateConfig("usersUrl", v)
-                }),
-                n.React.createElement(J, {
-                    title: "Endpoint/Base URL",
-                    value: cfg.endpoint || "",
-                    placeholder: "https://cdn.example.com",
-                    onChange: (v) => updateConfig("endpoint", v)
-                }),
-                n.React.createElement(u, {
-                    label: "Use Custom URL Template",
-                    subLabel: "Enable advanced URL formatting",
-                    leading: n.React.createElement(u.Icon, { source: f.getAssetIDByName("ic_edit") }),
-                    trailing: n.React.createElement(K, {
-                        value: cfg.useCustomTemplate,
-                        onValueChange: (v) => updateConfig("useCustomTemplate", v)
-                    })
-                }),
-                cfg.useCustomTemplate && n.React.createElement(J, {
-                    title: "Custom URL Template",
-                    value: cfg.customTemplate || "",
-                    placeholder: "{endpoint}/users/{userId}/banner?{hash}",
-                    subLabel: "Available: {endpoint}, {userId}, {hash}",
-                    onChange: (v) => updateConfig("customTemplate", v)
-                })
-            ),
-            n.React.createElement(U, { title: "Actions" },
-                n.React.createElement(u, {
-                    label: "Reload Database",
-                    leading: n.React.createElement(u.Icon, { source: f.getAssetIDByName("ic_message_retry") }),
-                    onPress: h(function*() {
-                        var e = yield y();
-                        yield P();
-                        return e ? g.showToast("Reloaded DB", f.getAssetIDByName("check")) 
-                                 : g.showToast("Failed to reload DB", f.getAssetIDByName("small"));
-                    })
-                }),
-                n.React.createElement(u, {
-                    label: "Reset to Defaults",
-                    leading: n.React.createElement(u.Icon, { source: f.getAssetIDByName("ic_trash") }),
-                    onPress: () => {
-                        config = { ...DEFAULT_CONFIG };
-                        saveConfig(config);
-                        setCfg({ ...DEFAULT_CONFIG });
-                        P();
-                        g.showToast("Settings reset", f.getAssetIDByName("check"));
-                    }
-                })
-            ),
-            n.React.createElement(U, { title: "Support" },
-                n.React.createElement(u, {
-                    label: "Discord Server",
-                    leading: n.React.createElement(u.Icon, { source: f.getAssetIDByName("Discord") }),
-                    trailing: u.Arrow,
-                    onPress: () => n.url.openDeeplink("https://discord.gg/TeRQEPb")
+        // List existing banners
+        React.createElement(Text, { style: { fontSize: 16, fontWeight: "bold", marginTop: 24, marginBottom: 12 } }, 
+            `Saved Banners (${bannerList.length})`
+        ),
+        
+        ...bannerList.map(([uid, url]) => 
+            React.createElement(View, { 
+                key: uid,
+                style: { 
+                    backgroundColor: "#232428", 
+                    padding: 12, 
+                    borderRadius: 8, 
+                    marginBottom: 8 
+                }
+            },
+                React.createElement(Text, { style: { fontWeight: "bold", color: "#fff" } }, uid),
+                React.createElement(Text, { 
+                    style: { color: "#b5bac1", fontSize: 12, marginTop: 4 },
+                    numberOfLines: 1
+                }, url),
+                React.createElement(Button, {
+                    onPress: () => removeBanner(uid),
+                    title: "Remove",
+                    color: "#ed4245",
+                    style: { marginTop: 8 }
                 })
             )
-        );
-    };
+        )
+    );
+};
 
-    l.fetchData = y;
-    l.onLoad = P;
-    l.onUnload = A;
-    l.settings = _;
-    l.getConfig = () => ({ ...config });
-    l.setConfig = (newCfg) => {
-        config = { ...config, ...newCfg };
-        saveConfig(config);
-        return P();
-    };
-
-    return l;
-})({}, vendetta, vendetta.metro, vendetta.patcher, vendetta.utils, vendetta.ui.toasts, vendetta.metro.common, vendetta.ui.assets, vendetta.ui.components);
-          
+export default {
+    onLoad: () => {
+        logger.log("CustomBanner", "Plugin loading...");
+        const success = patchBanner();
+        if (success) {
+            toasts.showToast("Custom Banners loaded");
+        } else {
+            toasts.showToast("Failed to load Custom Banners");
+        }
+    },
+    onUnload: () => {
+        patches.forEach(p => p?.());
+        patches = [];
+        logger.log("CustomBanner", "Plugin unloaded");
+    },
+    settings: Settings
+};
